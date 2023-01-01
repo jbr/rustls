@@ -28,7 +28,7 @@ use crate::tls13::key_schedule::{
 use crate::tls13::Tls13CipherSuite;
 use crate::verify;
 #[cfg(feature = "quic")]
-use crate::{conn::Protocol, msgs::base::PayloadU16, quic};
+use crate::{conn::Protocol, quic};
 #[cfg(feature = "secret_extraction")]
 use crate::{conn::Side, suites::PartiallyExtractedSecrets};
 use crate::{sign, KeyLog};
@@ -997,7 +997,8 @@ impl ExpectTraffic {
             }
         };
 
-        let value = persist::Tls13ClientSessionValue::new(
+        #[allow(unused_mut)]
+        let mut value = persist::Tls13ClientSessionValue::new(
             self.suite,
             nst.ticket.0.clone(),
             secret,
@@ -1013,24 +1014,24 @@ impl ExpectTraffic {
         );
 
         #[cfg(feature = "quic")]
-        if let Some(sz) = nst.get_max_early_data_size() {
-            if cx.common.protocol == Protocol::Quic && sz != 0 && sz != 0xffff_ffff {
-                return Err(Error::PeerMisbehavedError(
-                    "invalid max_early_data_size".into(),
-                ));
+        {
+            if let Some(sz) = nst.get_max_early_data_size() {
+                if cx.common.protocol == Protocol::Quic && sz != 0 && sz != 0xffff_ffff {
+                    return Err(Error::PeerMisbehavedError(
+                        "invalid max_early_data_size".into(),
+                    ));
+                }
+            }
+
+            if let (Protocol::Quic, Some(ref quic_params)) =
+                (cx.common.protocol, &cx.common.quic.params)
+            {
+                value.set_quic_params(quic_params);
             }
         }
 
         let key = persist::ClientSessionKey::session_for_server_name(&self.server_name);
-        #[allow(unused_mut)]
-        let mut ticket = value.get_encoding();
-
-        #[cfg(feature = "quic")]
-        if let (Protocol::Quic, Some(ref quic_params)) =
-            (cx.common.protocol, &cx.common.quic.params)
-        {
-            PayloadU16::encode_slice(quic_params, &mut ticket);
-        }
+        let ticket = value.get_encoding();
 
         let worked = self
             .session_storage
