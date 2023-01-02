@@ -30,6 +30,22 @@ where
         }
     }
 
+    pub(crate) fn get_or_insert_and_edit(
+        &mut self,
+        k: K,
+        new_value: impl FnOnce() -> V,
+        edit: impl FnOnce(&mut V),
+    ) {
+        match self.map.entry(k) {
+            Entry::Occupied(value) => edit(value.into_mut()),
+            entry @ Entry::Vacant(_) => {
+                self.oldest
+                    .push_back(entry.key().clone());
+                edit(entry.or_insert_with(new_value))
+            }
+        }
+    }
+
     pub(crate) fn insert(&mut self, k: K, v: V) {
         let inserted_new_item = match self.map.entry(k) {
             Entry::Occupied(mut old) => {
@@ -60,6 +76,14 @@ where
         Q: Hash + Eq,
     {
         self.map.get(k)
+    }
+
+    pub(crate) fn get_mut<Q: ?Sized>(&mut self, k: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        self.map.get_mut(k)
     }
 
     pub(crate) fn remove<Q: ?Sized>(&mut self, k: &Q) -> Option<V>
