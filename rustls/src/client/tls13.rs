@@ -914,6 +914,12 @@ impl State<ClientConnectionData> for ExpectFinished {
             key_schedule_finished.sign_client_finish(&handshake_hash);
         emit_finished_tls13(&mut st.transcript, verify_data, cx.common);
 
+        /* We're now sure this server supports TLS1.3.  But if we run out of TLS1.3 tickets
+         * when connecting to it again, we definitely don't want to attempt a TLS1.2 resumption. */
+        st.config
+            .session_storage
+            .forget_tls12_session(&st.server_name);
+
         /* Now move to our application traffic keys. */
         cx.common.check_aligned_handshake()?;
 
