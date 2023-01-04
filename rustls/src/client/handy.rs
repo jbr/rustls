@@ -21,12 +21,15 @@ impl client::StoresClientSessions for NoClientSessionStorage {
         None
     }
 
+    #[cfg(feature = "tls12")]
     fn put_tls12_session(&self, _: &ServerName, _: persist::Tls12ClientSessionValue) {}
 
+    #[cfg(feature = "tls12")]
     fn get_tls12_session(&self, _: &ServerName) -> Option<persist::Tls12ClientSessionValue> {
         None
     }
 
+    #[cfg(feature = "tls12")]
     fn forget_tls12_session(&self, _: &ServerName) {}
 
     fn add_tls13_ticket(&self, _: &ServerName, _: persist::Tls13ClientSessionValue) {}
@@ -42,6 +45,7 @@ struct ServerData {
     kx_hint: Option<NamedGroup>,
 
     // Zero or one TLS1.2 sessions.
+    #[cfg(feature = "tls12")]
     tls12: Option<persist::Tls12ClientSessionValue>,
 
     // Up to MAX_TLS13_TICKETS_PER_SERVER TLS1.3 tickets, most recent first.
@@ -52,6 +56,7 @@ impl ServerData {
     fn new() -> Self {
         Self {
             kx_hint: None,
+            #[cfg(feature = "tls12")]
             tls12: None,
             tls13: VecDeque::with_capacity(MAX_TLS13_TICKETS_PER_SERVER),
         }
@@ -95,6 +100,7 @@ impl client::StoresClientSessions for ClientSessionMemoryCache {
             .and_then(|sd| sd.kx_hint)
     }
 
+    #[cfg(feature = "tls12")]
     fn put_tls12_session(&self, server_name: &ServerName, value: persist::Tls12ClientSessionValue) {
         self.servers
             .lock()
@@ -104,6 +110,7 @@ impl client::StoresClientSessions for ClientSessionMemoryCache {
             });
     }
 
+    #[cfg(feature = "tls12")]
     fn get_tls12_session(
         &self,
         server_name: &ServerName,
@@ -115,6 +122,7 @@ impl client::StoresClientSessions for ClientSessionMemoryCache {
             .and_then(|sd| sd.tls12.as_ref().cloned())
     }
 
+    #[cfg(feature = "tls12")]
     fn forget_tls12_session(&self, server_name: &ServerName) {
         self.servers
             .lock()
