@@ -12,7 +12,7 @@ use crate::msgs::enums::{ContentType, HandshakeType};
 use crate::msgs::handshake::HandshakeMessagePayload;
 use crate::msgs::handshake::HandshakePayload;
 use crate::msgs::handshake::{NewSessionTicketExtension, NewSessionTicketPayloadTLS13};
-use crate::msgs::message::{Message, MessagePayload};
+use crate::msgs::message::{Message, MessagePayload, PlainMessage};
 use crate::msgs::persist;
 use crate::rand;
 use crate::server::ServerConfig;
@@ -1246,7 +1246,7 @@ impl State<ServerConnectionData> for ExpectFinished {
         Ok(Box::new(ExpectTraffic {
             suite: self.suite,
             key_schedule: key_schedule_traffic,
-            want_write_key_update: false,
+            enqueued_key_update_message: None,
             _fin_verified: fin,
         }))
     }
@@ -1256,7 +1256,7 @@ impl State<ServerConnectionData> for ExpectFinished {
 struct ExpectTraffic {
     suite: &'static Tls13CipherSuite,
     key_schedule: KeyScheduleTraffic,
-    want_write_key_update: bool,
+    enqueued_key_update_message: Option<Vec<u8>>,
     _fin_verified: verify::FinishedMessageVerified,
 }
 
@@ -1280,9 +1280,27 @@ impl ExpectTraffic {
 
         match kur {
             KeyUpdateRequest::UpdateNotRequested => {}
-            KeyUpdateRequest::UpdateRequested => {
-                self.want_write_key_update = true;
+
+            KeyUpdateRequest::UpdateRequested
+                if self
+                    .enqueued_key_update_message
+                    .is_none() =>
+            {
+                let message = PlainMessage::from(Message::build_key_update_notify());
+                self.enqueued_key_update_message = Some(
+                    common
+                        .record_layer
+                        .encrypt_outgoing(message.borrow())
+                        .encode(),
+                );
+                let write_key = self
+                    .key_schedule
+                    .next_server_application_traffic_secret();
+                common
+                    .record_layer
+                    .set_message_encrypter(self.suite.derive_encrypter(&write_key));
             }
+
             _ => {
                 common.send_fatal_alert(AlertDescription::IllegalParameter);
                 return Err(Error::CorruptMessagePayload(ContentType::Handshake));
@@ -1341,16 +1359,8 @@ impl State<ServerConnectionData> for ExpectTraffic {
     }
 
     fn perhaps_write_key_update(&mut self, common: &mut CommonState) {
-        if self.want_write_key_update {
-            self.want_write_key_update = false;
-            common.send_msg_encrypt(Message::build_key_update_notify().into());
-
-            let write_key = self
-                .key_schedule
-                .next_server_application_traffic_secret();
-            common
-                .record_layer
-                .set_message_encrypter(self.suite.derive_encrypter(&write_key));
+        if let Some(message) = self.enqueued_key_update_message.take() {
+            common.sendable_tls.append(message);
         }
     }
 
