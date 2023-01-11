@@ -717,9 +717,8 @@ impl<Data> ConnectionCommon<Data> {
     }
 
     pub(crate) fn send_some_plaintext(&mut self, buf: &[u8]) -> usize {
-        if let Ok(st) = &mut self.state {
-            st.perhaps_write_key_update(&mut self.common_state);
-        }
+        self.common_state
+            .perhaps_write_key_update();
         self.common_state
             .send_some_plaintext(buf)
     }
@@ -863,6 +862,8 @@ pub struct CommonState {
     received_plaintext: ChunkVecBuffer,
     sendable_plaintext: ChunkVecBuffer,
     pub(crate) sendable_tls: ChunkVecBuffer,
+    enqueued_key_update_message: Option<Vec<u8>>,
+
     #[allow(dead_code)] // only read for QUIC
     /// Protocol whose key schedule should be used. Unused for TLS < 1.3.
     pub(crate) protocol: Protocol,
@@ -893,6 +894,7 @@ impl CommonState {
             received_plaintext: ChunkVecBuffer::new(Some(DEFAULT_RECEIVED_PLAINTEXT_LIMIT)),
             sendable_plaintext: ChunkVecBuffer::new(Some(DEFAULT_BUFFER_LIMIT)),
             sendable_tls: ChunkVecBuffer::new(Some(DEFAULT_BUFFER_LIMIT)),
+            enqueued_key_update_message: None,
 
             protocol: Protocol::Tcp,
             #[cfg(feature = "quic")]
@@ -1394,6 +1396,26 @@ impl CommonState {
         #[cfg(not(feature = "quic"))]
         false
     }
+
+    pub(crate) fn enqueue_key_update_notification(&mut self) {
+        let message = PlainMessage::from(Message::build_key_update_notify());
+        self.enqueued_key_update_message = Some(
+            self.record_layer
+                .encrypt_outgoing(message.borrow())
+                .encode(),
+        );
+    }
+
+    pub(crate) fn has_pending_key_update(&self) -> bool {
+        self.enqueued_key_update_message
+            .is_some()
+    }
+
+    fn perhaps_write_key_update(&mut self) {
+        if let Some(message) = self.enqueued_key_update_message.take() {
+            self.sendable_tls.append(message);
+        }
+    }
 }
 
 pub(crate) trait State<Data>: Send + Sync {
@@ -1416,8 +1438,6 @@ pub(crate) trait State<Data>: Send + Sync {
     fn extract_secrets(&self) -> Result<PartiallyExtractedSecrets, Error> {
         Err(Error::HandshakeNotComplete)
     }
-
-    fn perhaps_write_key_update(&mut self, _cx: &mut CommonState) {}
 }
 
 pub(crate) struct Context<'a, Data> {

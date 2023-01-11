@@ -20,7 +20,7 @@ use crate::msgs::handshake::{CertificateEntry, CertificatePayloadTLS13};
 use crate::msgs::handshake::{HandshakeMessagePayload, HandshakePayload};
 use crate::msgs::handshake::{HasServerExtensions, ServerHelloPayload};
 use crate::msgs::handshake::{PresharedKeyIdentity, PresharedKeyOffer};
-use crate::msgs::message::{Message, MessagePayload, PlainMessage};
+use crate::msgs::message::{Message, MessagePayload};
 use crate::msgs::persist;
 use crate::tls13::key_schedule::{
     KeyScheduleEarly, KeyScheduleHandshake, KeySchedulePreHandshake, KeyScheduleTraffic,
@@ -944,7 +944,6 @@ impl State<ClientConnectionData> for ExpectFinished {
             suite: st.suite,
             transcript: st.transcript,
             key_schedule: key_schedule_traffic,
-            enqueued_key_update_message: None,
             _cert_verified: st.cert_verified,
             _sig_verified: st.sig_verified,
             _fin_verified: fin,
@@ -972,7 +971,6 @@ struct ExpectTraffic {
     suite: &'static Tls13CipherSuite,
     transcript: HandshakeHash,
     key_schedule: KeyScheduleTraffic,
-    enqueued_key_update_message: Option<Vec<u8>>,
     _cert_verified: verify::ServerCertVerified,
     _sig_verified: verify::HandshakeSignatureValid,
     _fin_verified: verify::FinishedMessageVerified,
@@ -1074,9 +1072,7 @@ impl ExpectTraffic {
 
         let immediately_rotate_keys = match key_update_request {
             KeyUpdateRequest::UpdateNotRequested => false,
-            KeyUpdateRequest::UpdateRequested => self
-                .enqueued_key_update_message
-                .is_none(),
+            KeyUpdateRequest::UpdateRequested => !common.has_pending_key_update(),
             _ => {
                 common.send_fatal_alert(AlertDescription::IllegalParameter);
                 return Err(Error::CorruptMessagePayload(ContentType::Handshake));
@@ -1084,14 +1080,7 @@ impl ExpectTraffic {
         };
 
         if immediately_rotate_keys {
-            let message = PlainMessage::from(Message::build_key_update_notify());
-            self.enqueued_key_update_message = Some(
-                common
-                    .record_layer
-                    .encrypt_outgoing(message.borrow())
-                    .encode(),
-            );
-
+            common.enqueue_key_update_notification();
             let write_key = self
                 .key_schedule
                 .next_client_application_traffic_secret();
@@ -1158,12 +1147,6 @@ impl State<ClientConnectionData> for ExpectTraffic {
     ) -> Result<(), Error> {
         self.key_schedule
             .export_keying_material(output, label, context)
-    }
-
-    fn perhaps_write_key_update(&mut self, common: &mut CommonState) {
-        if let Some(message) = self.enqueued_key_update_message.take() {
-            common.sendable_tls.append(message);
-        }
     }
 
     #[cfg(feature = "secret_extraction")]
