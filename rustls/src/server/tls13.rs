@@ -1264,7 +1264,7 @@ impl ExpectTraffic {
     fn handle_key_update(
         &mut self,
         common: &mut CommonState,
-        kur: &KeyUpdateRequest,
+        key_update_request: &KeyUpdateRequest,
     ) -> Result<(), Error> {
         #[cfg(feature = "quic")]
         {
@@ -1278,33 +1278,35 @@ impl ExpectTraffic {
 
         common.check_aligned_handshake()?;
 
-        match kur {
-            KeyUpdateRequest::UpdateNotRequested => {}
+        let immediately_rotate_keys = match key_update_request {
+            KeyUpdateRequest::UpdateNotRequested => false,
 
-            KeyUpdateRequest::UpdateRequested
-                if self
-                    .enqueued_key_update_message
-                    .is_none() =>
-            {
-                let message = PlainMessage::from(Message::build_key_update_notify());
-                self.enqueued_key_update_message = Some(
-                    common
-                        .record_layer
-                        .encrypt_outgoing(message.borrow())
-                        .encode(),
-                );
-                let write_key = self
-                    .key_schedule
-                    .next_server_application_traffic_secret();
-                common
-                    .record_layer
-                    .set_message_encrypter(self.suite.derive_encrypter(&write_key));
-            }
+            KeyUpdateRequest::UpdateRequested => self
+                .enqueued_key_update_message
+                .is_none(),
 
             _ => {
                 common.send_fatal_alert(AlertDescription::IllegalParameter);
                 return Err(Error::CorruptMessagePayload(ContentType::Handshake));
             }
+        };
+
+        if immediately_rotate_keys {
+            let message = PlainMessage::from(Message::build_key_update_notify());
+            self.enqueued_key_update_message = Some(
+                common
+                    .record_layer
+                    .encrypt_outgoing(message.borrow())
+                    .encode(),
+            );
+
+            let write_key = self
+                .key_schedule
+                .next_server_application_traffic_secret();
+
+            common
+                .record_layer
+                .set_message_encrypter(self.suite.derive_encrypter(&write_key));
         }
 
         // Update our read-side keys.
